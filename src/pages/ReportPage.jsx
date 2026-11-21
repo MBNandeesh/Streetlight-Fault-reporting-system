@@ -26,6 +26,7 @@ export default function ReportPage() {
   const [stage, setStage] = useState('')
   const [error, setError] = useState('')
   const [nearby, setNearby] = useState(null) // possible duplicate awaiting a decision
+  const [checkFailure, setCheckFailure] = useState(null) // duplicate check failed; offer to submit anyway
   const [warned, setWarned] = useState(false) // citizen chose to continue
   const [trackingId, setTrackingId] = useState('')
   const [copied, setCopied] = useState(false)
@@ -154,8 +155,10 @@ export default function ReportPage() {
 
     // Ask whether anything is already open at this spot before saving.
     // Only a count and distance come back, never another report's details.
+    // The check is advisory: if it fails, the citizen may still submit.
     if (!warned) {
       setStage('checking')
+      setCheckFailure(null)
       try {
         const result = await findNearbyOpenReports(location.latitude, location.longitude)
         if (result.openCount > 0) {
@@ -165,7 +168,7 @@ export default function ReportPage() {
         }
       } catch (checkError) {
         setStage('')
-        setError(checkError.message)
+        setCheckFailure({ ...location, message: checkError.message })
         return undefined
       }
     }
@@ -182,6 +185,13 @@ export default function ReportPage() {
     save(location, true)
   }
 
+  function submitWithoutCheck() {
+    if (!checkFailure) return
+    const location = { latitude: checkFailure.latitude, longitude: checkFailure.longitude }
+    setCheckFailure(null)
+    save(location, false)
+  }
+
   function resetForm() {
     setTrackingId('')
     setPhoto(null)
@@ -192,6 +202,7 @@ export default function ReportPage() {
     setLocationMode('none')
     setLocationError('')
     setNearby(null)
+    setCheckFailure(null)
     setWarned(false)
     setError('')
   }
@@ -428,6 +439,25 @@ export default function ReportPage() {
               </button>
               <button type="button" className="btn btn-secondary" onClick={() => setNearby(null)}>
                 Go back
+              </button>
+            </div>
+          </div>
+        )}
+
+        {checkFailure && (
+          <div className="warn-box" role="alert">
+            <p className="warn-label">Could not check for nearby reports</p>
+            <p>{checkFailure.message}</p>
+            <p className="hint">
+              This check is only a warning. You can still submit your report; an admin will review
+              the location.
+            </p>
+            <div className="button-row">
+              <button type="button" className="btn btn-primary" onClick={submitWithoutCheck}>
+                Submit anyway
+              </button>
+              <button type="button" className="btn btn-secondary" onClick={() => setCheckFailure(null)}>
+                Cancel
               </button>
             </div>
           </div>

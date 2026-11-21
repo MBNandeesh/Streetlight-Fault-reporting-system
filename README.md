@@ -190,6 +190,8 @@ Supabase-compatible stub:
 - Location permission denied switches to manual coordinates with an explanation.
 - Duplicate warning shows distance and status; *Go back* saves nothing; *Continue* creates the
   report with `duplicate_warning = true`.
+- If the duplicate check itself fails, the form explains it and offers **Submit anyway** instead
+  of blocking the report; the photo upload and insert still run.
 - A forced storage failure shows "Photo upload failed: …", keeps the form usable and shows no
   success screen; retrying succeeds.
 - Slow responses disable the form and show staged progress (Preparing photo → Uploading → Saving).
