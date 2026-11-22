@@ -6,6 +6,7 @@ import {
   listComplaints,
   listNearbyOpenComplaints,
   onAuthChange,
+  publicPhotoUrl,
   signInAdmin,
   signOutAdmin,
   updateComplaint,
@@ -293,7 +294,7 @@ function AdminDashboard({ session }) {
         {complaints.map((item) => (
           <li key={item.tracking_id}>
             <button type="button" className="complaint-row" onClick={() => setSelected(item)}>
-              <img className="thumb" src={item.photo_url} alt="" loading="lazy" />
+              <img className="thumb" src={publicPhotoUrl(item.photo_path)} alt="" loading="lazy" />
               <span className="complaint-main">
                 <span className="complaint-top">
                   <span className="mono small">{item.tracking_id}</span>
@@ -334,6 +335,7 @@ function AdminDetail({ complaint, onBack, onUpdated }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
+  const photoUrl = publicPhotoUrl(complaint.photo_path)
 
   // Other unresolved complaints within the same radius the citizen was warned about.
   useEffect(() => {
@@ -393,14 +395,14 @@ function AdminDetail({ complaint, onBack, onUpdated }) {
 
         <a
           className="photo-link"
-          href={complaint.photo_url}
+          href={photoUrl}
           target="_blank"
           rel="noreferrer"
           title="Open the full photo"
         >
           <img
             className="photo-view"
-            src={complaint.photo_url}
+            src={photoUrl}
             alt={`Reported streetlight ${complaint.tracking_id}`}
           />
         </a>

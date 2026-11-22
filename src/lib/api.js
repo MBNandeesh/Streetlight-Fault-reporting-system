@@ -4,6 +4,16 @@ import { DUPLICATE_RADIUS_M, distanceMetres } from './geo'
 
 export { createTrackingId } from './tracking'
 
+/**
+ * Complaints store the storage object path (reports/SL-XXXXXX.jpg), never a
+ * URL, so the database can pin it to the row's own tracking id. The public URL
+ * is derived here, from the configured project, at display time.
+ */
+export function publicPhotoUrl(path) {
+  if (!path) return ''
+  return supabase.storage.from(PHOTO_BUCKET).getPublicUrl(path).data.publicUrl
+}
+
 // Phone cameras produce 3-8 MB photos. Downscaling to 1280px keeps
 // uploads fast on mobile data and stays inside the storage size limit.
 const MAX_INPUT_BYTES = 15 * 1024 * 1024
@@ -161,14 +171,13 @@ export async function submitComplaint({
     throw new Error(`Photo upload failed: ${uploadError.message}`)
   }
 
-  const { data: publicUrlData } = supabase.storage.from(PHOTO_BUCKET).getPublicUrl(photoPath)
-
   report('saving')
 
   const { error: insertError } = await supabase.from('complaints').insert({
     tracking_id: trackingId,
     description: text,
-    photo_url: publicUrlData.publicUrl,
+    // The database requires exactly reports/<this tracking id>.jpg.
+    photo_path: photoPath,
     latitude,
     longitude,
     status: 'submitted',

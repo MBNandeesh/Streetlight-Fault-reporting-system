@@ -10,7 +10,10 @@
 create table if not exists public.complaints (
   tracking_id text primary key,
   description text not null check (char_length(description) between 5 and 500),
-  photo_url   text not null,
+  -- The photo is stored as an object path, never as a URL. No host is recorded,
+  -- so a caller cannot point a complaint at another site, and the path is tied
+  -- to this row's own tracking id (constraint added below).
+  photo_path  text not null,
   latitude    double precision not null check (latitude between -90 and 90),
   longitude   double precision not null check (longitude between -180 and 180),
   status      text not null default 'submitted'
@@ -31,13 +34,65 @@ alter table public.complaints
   add column if not exists duplicate_decision text
   check (duplicate_decision in ('separate', 'duplicate', 'grouped'));
 
+-- A table created by an older version of this file still has photo_url and no
+-- photo_path. Add and backfill the new column; existing data is kept, only the
+-- new column is filled in.
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'complaints'
+      and column_name = 'photo_path'
+  ) then
+    alter table public.complaints add column photo_path text;
+  end if;
+end $$;
+
+update public.complaints
+   set photo_path = 'reports/' || tracking_id || '.jpg'
+ where photo_path is null;
+
+alter table public.complaints alter column photo_path set not null;
+
+-- The stored object must be the one the app uploads for this complaint:
+-- reports/ plus the row's own tracking id. This replaces any URL parsing.
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'complaints_photo_path_matches_id'
+      and conrelid = 'public.complaints'::regclass
+  ) then
+    alter table public.complaints
+      add constraint complaints_photo_path_matches_id
+      check (photo_path = 'reports/' || tracking_id || '.jpg');
+  end if;
+end $$;
+
+-- Older installs required photo_url. Nothing reads it any more, so relax the
+-- NOT NULL instead of dropping the column (dropping would lose data).
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'complaints'
+      and column_name = 'photo_url'
+  ) then
+    alter table public.complaints alter column photo_url drop not null;
+  end if;
+end $$;
+
 -- The tracking id is the citizen's only key to their own report, so it must
 -- always be the unguessable SL-XXXXXX shape. This also rejects sequential or
 -- hand-written ids such as SL-000001.
 do $$
 begin
   if not exists (
-    select 1 from pg_constraint where conname = 'complaints_tracking_id_format'
+    select 1 from pg_constraint
+    where conname = 'complaints_tracking_id_format'
+      and conrelid = 'public.complaints'::regclass
   ) then
     alter table public.complaints
       add constraint complaints_tracking_id_format
@@ -69,9 +124,9 @@ returns boolean
 language sql
 stable
 security definer
-set search_path = public
+set search_path = ''
 as $$
-  select exists (
+  select exists(
     select 1 from public.admin_users where user_id = auth.uid()
   );
 $$;
@@ -84,6 +139,10 @@ grant execute on function public.is_admin() to authenticated;
 
 -- Citizens (anonymous) may only insert fresh complaints, always
 -- starting in the "submitted" state with no admin note.
+-- Timestamps must come from the database clock, so a crafted request cannot
+-- backdate a report (hiding it) or future-date it (pinning it to the top of
+-- the admin list). The upload path is already pinned to the row's own
+-- tracking id by the table constraint.
 drop policy if exists "citizens can submit complaints" on public.complaints;
 create policy "citizens can submit complaints"
   on public.complaints for insert
@@ -93,6 +152,8 @@ create policy "citizens can submit complaints"
     and admin_note is null
     -- only an admin may record a duplicate verdict
     and duplicate_decision is null
+    and created_at between now() - interval '5 seconds' and now()
+    and updated_at between now() - interval '5 seconds' and now()
   );
 
 -- Only admins can read the full list.
@@ -116,6 +177,7 @@ create policy "admins can update complaints"
 create or replace function public.touch_updated_at()
 returns trigger
 language plpgsql
+set search_path = ''
 as $$
 begin
   new.updated_at = now();
@@ -134,11 +196,15 @@ create trigger complaints_touch_updated_at
 --    only look up a single complaint if they know its tracking
 --    id, which is unguessable (SL-XXXXXX).
 -- ------------------------------------------------------------
-create or replace function public.track_complaint(p_tracking_id text)
+-- The return columns changed (photo_url -> photo_path), so the function is
+-- replaced rather than altered. No table data is involved.
+drop function if exists public.track_complaint(text);
+
+create function public.track_complaint(p_tracking_id text)
 returns table (
   tracking_id text,
   description text,
-  photo_url   text,
+  photo_path  text,
   latitude    double precision,
   longitude   double precision,
   status      text,
@@ -149,9 +215,9 @@ returns table (
 language sql
 stable
 security definer
-set search_path = public
+set search_path = ''
 as $$
-  select c.tracking_id, c.description, c.photo_url, c.latitude, c.longitude,
+  select c.tracking_id, c.description, c.photo_path, c.latitude, c.longitude,
          c.status, c.admin_note, c.created_at, c.updated_at
   from public.complaints c
   where c.tracking_id = upper(trim(p_tracking_id))
@@ -174,11 +240,29 @@ create or replace function public.nearby_open_reports(
   p_radius_m    integer default 50
 )
 returns table (open_count integer, nearest_m integer, nearest_status text)
-language sql
+language plpgsql
 stable
 security definer
-set search_path = public
+set search_path = ''
 as $$
+begin
+  -- Reject nonsense instead of silently returning "nothing nearby", which
+  -- would read as "no duplicate here" to the caller.
+  if p_latitude is null or p_longitude is null
+     or p_latitude < -90 or p_latitude > 90
+     or p_longitude < -180 or p_longitude > 180 then
+    raise exception 'Invalid coordinates'
+      using errcode = '22023';
+  end if;
+
+  -- The radius is capped so this cannot be used to count every open report
+  -- in the city from a single call.
+  if p_radius_m is null or p_radius_m < 1 or p_radius_m > 500 then
+    raise exception 'Radius must be between 1 and 500 metres'
+      using errcode = '22023';
+  end if;
+
+  return query
   with matches as (
     select c.status,
            (6371000 * 2 * asin(sqrt(
@@ -187,15 +271,14 @@ as $$
                * power(sin(radians(c.longitude - p_longitude) / 2), 2)
            ))) as distance_m
     from public.complaints c
-    where p_latitude between -90 and 90
-      and p_longitude between -180 and 180
-      and c.status not in ('resolved', 'rejected')
+    where c.status not in ('resolved', 'rejected')
   )
   select count(*)::integer,
-         min(distance_m)::integer,
-         (array_agg(status order by distance_m))[1]
-  from matches
-  where distance_m <= greatest(p_radius_m, 1);
+         min(m.distance_m)::integer,
+         (array_agg(m.status order by m.distance_m))[1]
+  from matches m
+  where m.distance_m <= p_radius_m;
+end;
 $$;
 
 grant execute on function public.nearby_open_reports(double precision, double precision, integer)
@@ -216,13 +299,15 @@ values (
 )
 on conflict (id) do update set public = true;
 
+-- Uploads are limited to the exact object name the app creates:
+-- reports/SL-XXXXXX.jpg, using the same alphabet as the tracking id.
 drop policy if exists "anyone can upload a report photo" on storage.objects;
 create policy "anyone can upload a report photo"
   on storage.objects for insert
   to anon, authenticated
   with check (
     bucket_id = 'streetlight-photos'
-    and (storage.foldername(name))[1] = 'reports'
+    and name ~ '^reports/SL-[2-9A-HJ-NP-Z]{6}\.jpg$'
   );
 
 -- ------------------------------------------------------------

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { trackComplaint } from '../lib/api'
+import { publicPhotoUrl, trackComplaint } from '../lib/api'
 import { isValidTrackingId, normalizeTrackingId } from '../lib/tracking'
 import { formatCoords, formatDateTime, mapLink } from '../lib/format'
 import StatusBadge from '../components/StatusBadge'
@@ -151,9 +151,12 @@ export default function TrackPage({ initialId = '' }) {
             </div>
           </dl>
 
-          {report.photo_url && (
+          {report.photo_path && (
             <figure className="report-photo">
-              <img src={report.photo_url} alt={`Streetlight reported under ${report.tracking_id}`} />
+              <img
+                src={publicPhotoUrl(report.photo_path)}
+                alt={`Streetlight reported under ${report.tracking_id}`}
+              />
               <figcaption className="hint">Photo you submitted with this report</figcaption>
             </figure>
           )}
