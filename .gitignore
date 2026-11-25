@@ -8,3 +8,6 @@ dist-ssr
 .DS_Store
 .freebuff/
 research papers/
+
+# Local-only verification script (contains no secrets, but is not part of the app)
+verify-supabase.ps1
